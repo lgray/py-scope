@@ -1,0 +1,21 @@
+scope:
+  hostname: 192.168.0.3
+  port: 4000
+  timeout: 0.5
+  verbose: True
+---
+
+reset:
+- INIT
+- INIT
+- INIT
+- '*RST'
+- INIT
+- INIT
+- INIT
+
+---
+task:
+- reset
+- reset
+- reset
