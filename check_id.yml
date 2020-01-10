@@ -6,6 +6,7 @@ scope:
 ---
 
 check_id:
+- '*RST'
 - HEADER OFF
 - '*IDN?'
 

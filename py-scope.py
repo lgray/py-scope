@@ -29,15 +29,16 @@ class scope(object):
         self.sck.shutdown(socket.SHUT_RDWR)
         self.sck.close()
 
-    def send_cmd(self, cmd, readsize=DEFAULT_LONG_READ):
+    def send_cmd(self, cmd, readsize=DEFAULT_LONG_READ, zmq_socket=None):
         if self.verbose: 
             print('sending ->',cmd)        
         padded = cmd + '\n'
         self.sck.send(padded.encode())
         if 'CURVE' in cmd:
-            chunks = []
+            outbuf = b''
             self.sck.settimeout(self.daq_timeout)
             rcd = b''
+            
             while True:
                 try:
                     rcd = self.sck.recv(readsize)
@@ -45,16 +46,28 @@ class scope(object):
                         break
                 except Exception:
                     pass
-            chunks.append(rcd)
-            while len(b''.join(chunks)) < readsize:                
+            total_len = len(rcd)
+            rcd_len = len(rcd)
+            zmq_socket.send(rcd, zmq.NOBLOCK)
+            #print('rcd ->', rcd_len, total_len, rcd[:min(20, len(rcd))], '...', rcd[max(0,rcd_len-20):])
+            
+            outbuf += rcd
+            while outbuf[-1] != 10 or zmq_socket != None:
                 try:
                     rcd = self.sck.recv(readsize)                
                 except Exception:
                     rcd = b''
-                chunks.append(rcd)
-                
-            self.sck.settimeout(self.timeout)            
-            return b''.join(chunks)
+                rcd_len = len(rcd)
+                #print('rcd', rcd)
+                if rcd_len > 0 and rcd != '\n':
+                    total_len += rcd_len
+                    #print('rcd ->', rcd_len, total_len, rcd[:min(20, len(rcd))], '...', rcd[max(0,rcd_len-20):])
+                    #outbuf += rcd
+                    #outbuf = b''
+                    zmq_socket.send(rcd, zmq.NOBLOCK)
+            print('ended!')
+            self.sck.settimeout(self.timeout)          
+            return outbuf
         elif '?' in cmd:
             return self.sck.recv(4096).decode().strip()
         elif '*RST' == cmd:
@@ -88,7 +101,8 @@ class scope(object):
         for i in range(SCOPE_NCHANNELS):
             channel_bytes = (1 if not out['fastframe'] else out['nFrames']) * out['nPt'] * out['vertical%d' % (i+1)][3]
             str_ch_bytes = str(channel_bytes)
-            header = '#'+hex(len(str_ch_bytes))[-1].upper()+str_ch_bytes
+            header = '#'+hex(len(str_ch_bytes)).strip('0x').upper()+str_ch_bytes
+            print('expected header:',header)
             sum_bytes += out['chmask'][i]*(channel_bytes + len(header))
         sum_bytes += 1 # for the '\n' at the end
         out['readout_size'] = out['nPt']
@@ -136,10 +150,17 @@ def acq(thescope, loop_spec, header_info):
     while True:
         try:
             for step in loop_spec:
-                data = thescope.send_cmd(step, readsize)
+                data = thescope.send_cmd(step, readsize, zmq_socket=socket)
+                if thescope.verbose:
+                    print('sending data ->', data[:min(80,len(data))])
                 socket.send(data, zmq.NOBLOCK)
             nevents += 1
         except KeyboardInterrupt:
+            try:
+                thescope.send_cmd('BUSY?')
+            except:
+                pass
+
             return nevents
 
 def receiver():
@@ -149,16 +170,35 @@ def receiver():
     rsck.connect('tcp://0.0.0.0:33373')
     ssck = context.socket(zmq.PUSH)
     ssck.connect('tcp://0.0.0.0:33374')
+    outbuf = b''
     while True:
         try:
-            ssck.send(rsck.recv())
+            data = rsck.recv()
+            outbuf += data
+            #print(len(outbuf))
+            has_terminator = outbuf.find(b';\n#')
+            while has_terminator > -1:
+                #print('found terminator->',outbuf[has_terminator-5:has_terminator+2])
+                tosend = outbuf[:has_terminator+2]
+                ssck.send(tosend)
+                outbuf = outbuf[has_terminator+2:]
+                has_terminator = outbuf.find(b';\n#')
+                print(outbuf[:10], has_terminator)
+            if len(outbuf) > 2 and outbuf[-2:] == b';\n':                
+                #print('outbuf ->', len(outbuf), outbuf[:20], '...', outbuf[-20:])
+                tosend = outbuf
+                ssck.send(tosend)                
+                outbuf = b''
         except KeyboardInterrupt:
             return
+        except Exception as e:
+            print(e)
 
 def unpack_buffers(data, header_info):
     assert data[-1] == 10 #newline in ascii
+    assert data[-2] == 59 #semicolon in ascii
     assert data[0] == 35 #hash in ascii
-    unpack = data[:-1] # pop the trailing newline
+    unpack = data[:len(data)-2] # pop the trailing semicolon and newline
 
     def consume_header(data):
         if len(data) == 0:
@@ -202,11 +242,14 @@ def writer(out_file,header_info):
             bufs = unpack_buffers(data, header_info)
             stacked = np.stack(([bufs[i] for i in bufs.keys()]))            
             nevents += 1
-            dset.resize((header_info['nch'], nevents*header_info['readout_size']))
-            dset[:,(nevents-1)*header_info['readout_size']:nevents*header_info['readout_size']] = stacked
+            #print('datashape ->',stacked.shape)
+            data_len = stacked.shape[-1]
+            dset.resize((header_info['nch'], nevents*data_len))
+            dset[:,(nevents-1)*data_len:nevents*data_len] = stacked
             print('saved %d events' % (nevents * ( header_info['nFrames'] if header_info['fastframe'] else 1 )) , end= '\r')
         except KeyboardInterrupt:
             break
+    #print('\n')
     outf.close()
     return
 
