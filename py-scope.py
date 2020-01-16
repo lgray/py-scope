@@ -18,7 +18,8 @@ class scope(object):
         self.timeout = conf['timeout']
         if self.timeout == 'None': 
             self.timeout = None
-        self.daq_timeout = conf['daq_timeout'] if 'daq_timeout' in conf.keys() else conf['timeout']
+        self.file_split = conf['file_split'] if 'file_split' in conf.keys() else -1
+        self.daq_timeout = conf['daq_timeout'] if 'daq_timeout' in conf.keys() else self.timeout
         self.sck.connect((conf['hostname'], conf['port']))
         self.ro_query = {'horizontal': 'HORizontal:ACQLENGTH?;:WFMOutpre:XINcr?;:WFMOutpre:PT_Off?',
                          'fastframe': 'HORizontal:FASTframe:STATE?;:HORizontal:FASTframe:COUNt?',
@@ -59,7 +60,7 @@ class scope(object):
                     rcd = b''
                 rcd_len = len(rcd)
                 #print('rcd', rcd)
-                if rcd_len > 0 and rcd != '\n':
+                if rcd_len > 0 and rcd != b'\n':
                     total_len += rcd_len
                     #print('rcd ->', rcd_len, total_len, rcd[:min(20, len(rcd))], '...', rcd[max(0,rcd_len-20):])
                     #outbuf += rcd
@@ -174,19 +175,25 @@ def receiver():
     while True:
         try:
             data = rsck.recv()
-            outbuf += data
-            #print(len(outbuf))
+            if data != b';\n':
+                outbuf += data
+            #print(len(data), len(outbuf), data[:min(len(data), 20)], '...', data[max(0, len(data) - 20):])
             has_terminator = outbuf.find(b';\n#')
             while has_terminator > -1:
                 #print('found terminator->',outbuf[has_terminator-5:has_terminator+2])
                 tosend = outbuf[:has_terminator+2]
+                #print('sending buf:', tosend)
                 ssck.send(tosend)
                 outbuf = outbuf[has_terminator+2:]
                 has_terminator = outbuf.find(b';\n#')
-                print(outbuf[:10], has_terminator)
-            if len(outbuf) > 2 and outbuf[-2:] == b';\n':                
-                #print('outbuf ->', len(outbuf), outbuf[:20], '...', outbuf[-20:])
-                tosend = outbuf
+                print(outbuf[:min(len(outbuf),10)], len(outbuf), outbuf[max(len(outbuf)-10, 0):], has_terminator)
+                
+            if len(outbuf) > 2 and (outbuf[-2:] == b';\n' or outbuf[-1:] == b';'):                
+                if outbuf[-2:] == b';\n':
+                    tosend = outbuf
+                elif outbuf[-1:] == b';':
+                    tosend = outbuf + b'\n'
+                #print('tosend ->', len(tosend), tosend[:20], '...', tosend[-20:])
                 ssck.send(tosend)                
                 outbuf = b''
         except KeyboardInterrupt:
@@ -220,13 +227,16 @@ def unpack_buffers(data, header_info):
     #print('received -> data of size', len(data), 'bytes and', len(out.keys()), 'sub-buffers')
     return out
 
-def writer(out_file,header_info):
+def writer(out_file, header_info, file_split):
     import zmq
     import h5py
     context = zmq.Context()
     rsck = context.socket(zmq.PULL)
     rsck.bind('tcp://0.0.0.0:33374')
-    outf = h5py.File(out_file,'w')
+    ifile = 0
+    out_file_parts = out_file.split('.')
+    fname = out_file_parts[0] + '_{0}'.format(ifile) + '.' + '.'.join(out_file_parts[1:])
+    outf = h5py.File(fname,'w')
     dset = outf.create_dataset("waveform",
                                (header_info['nch'], 0),
                                maxshape=(header_info['nch'], None),
@@ -235,6 +245,7 @@ def writer(out_file,header_info):
     for k, v in header_info.items():
         dset.attrs.create(k, v)
     #print(dset)
+    nevents_tot = 0
     nevents = 0
     while True:
         try:
@@ -246,7 +257,22 @@ def writer(out_file,header_info):
             data_len = stacked.shape[-1]
             dset.resize((header_info['nch'], nevents*data_len))
             dset[:,(nevents-1)*data_len:nevents*data_len] = stacked
-            print('saved %d events' % (nevents * ( header_info['nFrames'] if header_info['fastframe'] else 1 )) , end= '\r')
+            print('saved %d events' % ((nevents + nevents_tot) * ( header_info['nFrames'] if header_info['fastframe'] else 1 )) , end= '\r')
+            if file_split > 0 and nevents > file_split:
+                outf.close()
+                nevents_tot += nevents
+                nevents = 0
+                ifile += 1
+                fname = out_file_parts[0] + '_{0}'.format(ifile) + '.' + '.'.join(out_file_parts[1:])
+                print('opening new file:', fname)
+                outf = h5py.File(fname,'w')
+                dset = outf.create_dataset("waveform",
+                                           (header_info['nch'], 0),
+                                           maxshape=(header_info['nch'], None),
+                                           compression="gzip",
+                                           dtype = np.int8)
+                for k, v in header_info.items():
+                    dset.attrs.create(k, v)
         except KeyboardInterrupt:
             break
     #print('\n')
@@ -257,7 +283,7 @@ def run_acq_loop(thescope, loop_spec, out_file):
     header_info = thescope.describe_readout()
     with ProcessPoolExecutor(max_workers=3) as pexec:
         acq_loop = pexec.submit(acq, thescope, loop_spec, header_info)
-        write_loop = pexec.submit(writer, out_file, header_info)
+        write_loop = pexec.submit(writer, out_file, header_info, thescope.file_split)
         rec_loop = pexec.submit(receiver)
         while acq_loop.running():
             try:
