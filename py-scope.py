@@ -123,10 +123,14 @@ out_file='test.hdf5'
 myscope = None
 states = {}
 tasks = None
+out_dir = None
 print('opening', sys.argv[1])
 if len(sys.argv) > 2:
     print('saving to', sys.argv[2])
     out_file = sys.argv[2]
+if len(sys.argv) > 3:
+    print('completed output files will be moved to', sys.argv[3])
+    out_dir = sys.argv[3]
 with open(sys.argv[1]) as f:    
     config = yaml.load_all(f, Loader=yaml.SafeLoader)
     for conf in config:
@@ -227,16 +231,19 @@ def unpack_buffers(data, header_info):
     #print('received -> data of size', len(data), 'bytes and', len(out.keys()), 'sub-buffers')
     return out
 
+
+writing_postfix = '.__writing__'
 def writer(out_file, header_info, file_split):
     import zmq
     import h5py
+    import os
     context = zmq.Context()
     rsck = context.socket(zmq.PULL)
     rsck.bind('tcp://0.0.0.0:33374')
     ifile = 0
     out_file_parts = out_file.split('.')
     fname = out_file_parts[0] + '_{0}'.format(ifile) + '.' + '.'.join(out_file_parts[1:])
-    outf = h5py.File(fname,'w')
+    outf = h5py.File(fname + writing_postfix,'w')
     dset = outf.create_dataset("waveform",
                                (header_info['nch'], 0),
                                maxshape=(header_info['nch'], None),
@@ -258,14 +265,20 @@ def writer(out_file, header_info, file_split):
             dset.resize((header_info['nch'], nevents*data_len))
             dset[:,(nevents-1)*data_len:nevents*data_len] = stacked
             print('saved %d events' % ((nevents + nevents_tot) * ( header_info['nFrames'] if header_info['fastframe'] else 1 )) , end= '\r')
-            if file_split > 0 and nevents > file_split:
+            if file_split > 0 and nevents >= file_split:
                 outf.close()
+                if out_dir is not None:
+                    move_to = os.path.join(out_dir, fname.split('/')[-1])
+                    os.rename(fname + writing_postfix, move_to)
+                else:
+                    os.rename(fname + writing_postfix, fname)
                 nevents_tot += nevents
                 nevents = 0
                 ifile += 1
                 fname = out_file_parts[0] + '_{0}'.format(ifile) + '.' + '.'.join(out_file_parts[1:])
+                
                 print('opening new file:', fname)
-                outf = h5py.File(fname,'w')
+                outf = h5py.File(fname + writing_postfix,'w')
                 dset = outf.create_dataset("waveform",
                                            (header_info['nch'], 0),
                                            maxshape=(header_info['nch'], None),
@@ -274,9 +287,14 @@ def writer(out_file, header_info, file_split):
                 for k, v in header_info.items():
                     dset.attrs.create(k, v)
         except KeyboardInterrupt:
+            outf.flush()
             break
-    #print('\n')
     outf.close()
+    if out_dir is not None:
+        move_to = os.path.join(out_dir, fname.split('/')[-1])
+        os.rename(fname + writing_postfix, move_to)
+    else:
+        os.rename(fname + writing_postfix, fname)
     return
 
 def run_acq_loop(thescope, loop_spec, out_file):
