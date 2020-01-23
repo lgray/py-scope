@@ -1,9 +1,18 @@
 #!/bin/bash
 
 config=$1
-fname=$2
+runname=$2
 save_dir=$3
 
-mkdir -p $save_dir
+fname=${runname}.hdf5
+outdir=${save_dir}/${runname}
+outdir_plots=${outdir}/plots
 
-python3 py-scope.py $config $fname $save_dir
+mkdir -p ${outdir}
+mkdir -p ${outdir_plots}
+
+python3 data_plotter.py ${outdir} ${outdir_plots} >& data_plotter.log &
+
+python3 py-scope.py ${config} ${fname} ${outdir}
+
+trap "kill -9 `jobs -p`" EXIT

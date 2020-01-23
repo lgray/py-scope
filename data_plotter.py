@@ -2,10 +2,17 @@ import os, sys
 import h5py
 import numpy as np
 import pandas as pd
+import os, sys
+import h5py
+import numpy as np
+import pandas as pd
+
 from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy import optimize
 import matplotlib.pyplot as plt
 from scipy import integrate
+
+import scipy.stats
 
 from scipy.optimize import curve_fit
 from scipy.stats import norm
@@ -65,6 +72,9 @@ def calculate_tcross(v_in, percent_thresh, dt, gain_post=-10, pedestal_length=40
 def gaus(x,a,x0,sigma):
     return a*np.exp(-(x-x0)**2/(2*sigma**2))
 
+def moyal(x, norm, loc, scale):
+    return norm*scipy.stats.moyal.pdf(x, loc, scale)
+
 def plot_tcross(ich, t0s, trigger_t0s=None, ax=None, dofit=False, num_bins=20):
     mask = t0s > -0.5
     if trigger_t0s is not None:
@@ -106,7 +116,75 @@ def plot_tcross(ich, t0s, trigger_t0s=None, ax=None, dofit=False, num_bins=20):
     else:
         ax.set(xlabel=r'Time_{Trigger} - Time_{Channel} (s)', ylabel='Occurance',
                title='Channel {0}'.format(ich+1))
+
+def plot_time_quan(ich, t0s, trigger_t0s=None, ax=None, dofit=False, num_bins=20):
+    mask = t0s > -0.5
+    if trigger_t0s is not None:
+        mask = (t0s > -0.5) & (trigger_t0s > -0.5)
+    clean_t0s = t0s[mask]
+    if trigger_t0s is not None:
+        clean_trigger_t0s = trigger_t0s[mask]
+
+    to_plot = clean_t0s    
+    if trigger_t0s is not None:
+        to_plot = clean_t0s - clean_trigger_t0s
     
+    mean = np.mean(to_plot)
+    sigma = np.std(to_plot, ddof=1)
+    
+    range_hist = (np.min(to_plot),np.max(to_plot))
+    if ax is None:
+        fig, ax = plt.subplots(dpi=400)
+    
+    if dofit:
+        bins, edges = np.histogram(to_plot, num_bins, density=False)
+        centers = 0.5*(edges[1:] + edges[:-1])
+        try:
+            popt, pcov = curve_fit(gaus,centers,bins,p0=[1,mean,sigma])
+            ax.plot(centers, gaus(centers,popt[0], popt[1], popt[2]))
+            mean = popt[1]
+            sigma = popt[2]
+        except:
+            pass        
+    
+    ax.hist(to_plot, num_bins, range=range_hist, 
+            density=False,
+            label='mean = %.3g s\nsigma = %.3g\n#event = %d\n#bin = %d'%(mean,sigma,to_plot.size,num_bins))
+    ax.legend()
+    ax.grid(which='both')
+    if trigger_t0s is None:
+        ax.set(xlabel='Time (s)', ylabel='Occurance',
+               title='Channel {0}'.format(ich+1))
+    else:
+        ax.set(xlabel=r'Time_{Trigger} - Time_{Channel} (s)', ylabel='Occurance',
+               title='Channel {0}'.format(ich+1))
+
+def calculate_time(v_in, dt, th_cfd=0.5, tdc_bin=0.005, tdc_start = 40):
+    eventLen = v_in.shape[0]
+    time = np.arange(v_in.shape[1])*dt*1e9 #nanoseconds
+    
+    noise_floor = np.std(v_in[:300], ddof=1)
+    
+    t_cfd = np.zeros(eventLen)
+    mask = ( np.min(v_in, axis=-1) < -3*noise_floor )
+    for itrace, trace in enumerate(v_in):
+        v_pk = np.argmin(trace)
+        v_pk_range = np.linspace(time[max(0, v_pk - 20)], time[min(v_in.shape[1]-1, v_pk+20)], 10000)
+        tdc_start = time[max(0, v_pk - 20)]
+        tdc_max = time[v_in.shape[1]-1]
+        interp_signal = InterpolatedUnivariateSpline(time, trace)
+        v_pk = np.min(interp_signal(v_pk_range))
+        v_th_cfd = 0 - th_cfd*(0 - v_pk)
+        t_cfd[itrace] = tdc_start
+        istep = 0
+        while(interp_signal(t_cfd[itrace]) > v_th_cfd):
+            t_cfd[itrace] += tdc_bin
+            istep += 1
+        
+    std_t_cfd = np.std(t_cfd[mask])
+    std_t_cfd = std_t_cfd * 1e3
+    mean_t_cfd = np.mean(t_cfd[mask])
+    return t_cfd, std_t_cfd, mean_t_cfd
     
 def calculate_charge(v_in, dt, transCond, gain_post=-10, pedestal_length=400, charge_norm=1e15):
     v_preamp_pedsub = calculate_voltages(v_in, gain_post=gain_post, 
@@ -117,20 +195,37 @@ def calculate_charge(v_in, dt, transCond, gain_post=-10, pedestal_length=400, ch
 
 
 def plot_charge(dataset, ich, dt, transCond, mask=None, ax=None, gain_post=-10, 
-                pedestal_length=400, charge_norm=1e15, num_bins=200):
+                pedestal_length=400, charge_norm=1e15, num_bins=200, dofit=True):
     charges = calculate_charge(dataset[ich], dt, transCond, 
                                gain_post=gain_post,
                                pedestal_length=pedestal_length,                               
                                charge_norm=charge_norm)
     Q_avg = np.mean(charges)
     minmax = (np.min(charges),np.max(charges))
-    range_hist = (0,10)#(minmax[0]*(0.5 if minmax[0] > 0 else 2.0),minmax[1]*(2.0 if minmax[1] > 0 else 0.5))
+    range_hist = (0,20)#(minmax[0]*(0.5 if minmax[0] > 0 else 2.0),minmax[1]*(2.0 if minmax[1] > 0 else 0.5))
     if ax is None:
         fig, ax = plt.subplots(dpi=400)
+
+    scale = np.std(charges, ddof=1)
+    loc = np.mean(charges)
+    norm = charges.size
+    if dofit:
+        bins, edges = np.histogram(charges, num_bins, range=range_hist, density=False)
+        centers = 0.5*(edges[1:] + edges[:-1])
+        try:
+            popt, pcov = curve_fit(moyal, centers, bins, p0=[norm, loc,scale])
+            ax.plot(centers, moyal(centers, popt[0], popt[1], popt[2]))
+            norm = popt[0]
+            loc = popt[1]
+            scale = popt[2]
+        except:
+            pass 
+    #print('landau fit ->', norm, loc, scale)    
+    
     #ax.set_yscale('log')
     ax.hist(charges, num_bins, range=range_hist, 
              density=False,
-             label='peak = %.2f fC\n#event = %d\n#bin = %d'%(Q_avg,dataset.shape[1],num_bins))
+             label='peak = %.2f fC\n#event = %d\n#bin = %d'%(loc,dataset.shape[1],num_bins))
     ax.legend()
     ax.grid(which='both')
     ax.set(xlabel='Charge (fC)', ylabel='Occurance',
@@ -229,6 +324,19 @@ def plot_waveforms(time, v_ch1, v_ch2, v_ch3, v_ch4, pp, xlable="Time(ns)", ylab
         plt.show()
     plt.close(fig)
 
+transCond = {'highgain': 15.7e3,
+             'lowgain': 4.4e3}
+
+path ='data/'
+filename = "SingleTrigger_1139_16012020_0.hdf5"
+
+filelist = []
+for apath in os.listdir(path):
+    if apath.find(filename) > -1:
+        filelist.append(os.path.join(path,apath))
+
+filelist = ['data/SingleTrigger_1832_16012020_0.hdf5',
+            ]
 
 ##### signal processing for all channels #############
 def plotting_job(afile, scope_config, outfile):
@@ -238,15 +346,17 @@ def plotting_job(afile, scope_config, outfile):
     pp = PdfPages(outfile)
     trigger_t0s = None
     measure_t0s = {}
-    ch1 = np.max(calculate_voltages(data[0], gain_post=scope_config['gains'][0]), axis=-1) > 0.015
-    ch2 = np.max(calculate_voltages(data[1], gain_post=scope_config['gains'][1]), axis=-1) > 0.015
-    ch3 = np.max(calculate_voltages(data[2], gain_post=scope_config['gains'][2]), axis=-1) > 0.015
+    ch1 = np.max(calculate_voltages(data[0], gain_post=np.sign(scope_config['gains'][0])), axis=-1) > 0.015
+    ch2 = np.max(calculate_voltages(data[1], gain_post=np.sign(scope_config['gains'][1])), axis=-1) > 0.015
+    ch3 = np.max(calculate_voltages(data[2], gain_post=np.sign(scope_config['gains'][2])), axis=-1) > 0.015
+    #print(ch1.shape, ch2.shape, ch3.shape)
     mask = (ch1 & ch2 & ch3)
+    t0s_simple = []
     for ch in range(4):        
         if attrs['chmask'][ch]:            
             fig, ax = plt.subplots(dpi=400)
             thegain = scope_config['gains'][ch]
-            plot_amplitude(data[:,mask,:], ch, ax=ax, gain_post=thegain)
+            plot_amplitude(data[:,mask,:], ch, ax=ax, gain_post=np.sign(thegain))
             pp.savefig(fig)
             plt.close(fig)
 
@@ -254,6 +364,13 @@ def plotting_job(afile, scope_config, outfile):
             plot_charge(data[:,mask,:], ch, attrs['dt'], tc, ax=ax, gain_post=thegain)                       
             pp.savefig(fig)
             plt.close(fig)
+            
+            #t0s_simple.append(calculate_time(data[ch], 
+            #                                 attrs['dt'], 
+            #                                 th_cfd=scope_config['thresholds'][ch], 
+            #                                 tdc_bin=0.005, 
+            #                                 tdc_start = 40))
+            #
             t0s = calculate_tcross(data[ch], scope_config['thresholds'][ch], 
                                     attrs['dt'], gain_post=thegain)
             fig, ax = plt.subplots(dpi=400)
@@ -266,6 +383,8 @@ def plotting_job(afile, scope_config, outfile):
                 measure_t0s[ch] = t0s
             
     #fig, ax = plt.subplots(1, len(measure_t0s.keys()), dpi=400)
+    #print(np.std((0.5*(t0s_simple[0][0]+t0s_simple[2][0]) - t0s_simple[1][0])[mask], ddof=1))
+    
     nch = len(measure_t0s.keys())
     iax = 0
     for ch, t0s in measure_t0s.items():
@@ -276,11 +395,11 @@ def plotting_job(afile, scope_config, outfile):
         iax += 1
     pp.close()
 
-gain_post = -1.0
+gain_post = -10.0
 scope_config = {'trigger': 2,
                 'transcond':{'highgain': 15.7e3, 'lowgain': 4.4e3},
                 'gains': [gain_post, gain_post, gain_post, 1.0],
-                'thresholds': [0.2, 0.2, 0.2, 0.5]}
+                'thresholds': [0.5, 0.5, 0.5, 0.5]}
 
 import sys
 import glob
@@ -289,9 +408,9 @@ import time
 data_path = sys.argv[1]
 print(data_path.split('/'))
 out_path = '/'.join(data_path.split('/')[:-1])
-print('out path ->', out_path)
 if len(sys.argv) > 2:
     out_path = sys.argv[2]
+print('out path ->', out_path)
 processed_files = set()
 
 while True:
