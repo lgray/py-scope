@@ -346,9 +346,15 @@ def plotting_job(afile, scope_config, outfile):
     pp = PdfPages(outfile)
     trigger_t0s = None
     measure_t0s = {}
-    ch1 = np.max(calculate_voltages(data[0], gain_post=np.sign(scope_config['gains'][0])), axis=-1) > 0.015
-    ch2 = np.max(calculate_voltages(data[1], gain_post=np.sign(scope_config['gains'][1])), axis=-1) > 0.015
-    ch3 = np.max(calculate_voltages(data[2], gain_post=np.sign(scope_config['gains'][2])), axis=-1) > 0.015
+    
+    maxv_ch1 = np.max(calculate_voltages(data[0], gain_post=np.sign(scope_config['gains'][0])), axis=-1)
+    maxv_ch2 = np.max(calculate_voltages(data[1], gain_post=np.sign(scope_config['gains'][1])), axis=-1)
+    maxv_ch3 = np.max(calculate_voltages(data[2], gain_post=np.sign(scope_config['gains'][2])), axis=-1)
+    
+    ch1 = (maxv_ch1 > 0.015) & (maxv_ch1 < 0.272)
+    ch2 = (maxv_ch2 > 0.015) & (maxv_ch2 < 0.272)
+    ch3 = (maxv_ch3 > 0.015) & (maxv_ch3 < 0.272)
+
     #print(ch1.shape, ch2.shape, ch3.shape)
     mask = (ch1 & ch2 & ch3)
     t0s_simple = []
@@ -365,12 +371,12 @@ def plotting_job(afile, scope_config, outfile):
             pp.savefig(fig)
             plt.close(fig)
             
-            #t0s_simple.append(calculate_time(data[ch], 
-            #                                 attrs['dt'], 
-            #                                 th_cfd=scope_config['thresholds'][ch], 
-            #                                 tdc_bin=0.005, 
-            #                                 tdc_start = 40))
-            #
+            t0s_simple.append(calculate_time(data[ch], 
+                                             attrs['dt'], 
+                                             th_cfd=scope_config['thresholds'][ch], 
+                                             tdc_bin=0.005, 
+                                             tdc_start = 40))
+            
             t0s = calculate_tcross(data[ch], scope_config['thresholds'][ch], 
                                     attrs['dt'], gain_post=thegain)
             fig, ax = plt.subplots(dpi=400)
@@ -382,9 +388,28 @@ def plotting_job(afile, scope_config, outfile):
             else:
                 measure_t0s[ch] = t0s
             
-    #fig, ax = plt.subplots(1, len(measure_t0s.keys()), dpi=400)
-    #print(np.std((0.5*(t0s_simple[0][0]+t0s_simple[2][0]) - t0s_simple[1][0])[mask], ddof=1))
-    
+    fig, ax = plt.subplots(1, 1, dpi=400)
+    tch2_avg = (0.5*(t0s_simple[0][0]+t0s_simple[2][0]) - t0s_simple[1][0])[mask]
+    tch2_mean = np.mean(tch2_avg)
+    tch2_sigma = np.std(tch2_avg, ddof=1)
+    bins, edges = np.histogram(tch2_avg, 100, density=False)
+    centers = 0.5*(edges[1:] + edges[:-1])
+    try:
+        popt, pcov = curve_fit(gaus,centers,bins,p0=[1,tch2_mean,tch2_sigma])
+        ax.plot(centers, gaus(centers,popt[0], popt[1], popt[2]))
+        tch2_mean = popt[1]
+        tch2_sigma = abs(popt[2])
+    except:
+        pass
+    ax.hist(tch2_avg, 100, range=(-0.300, 0.300), 
+            density=False,
+            label='mean = %.3g ns\nsigma = %.3g ns\n#event = %d\n#bin = %d'%(tch2_mean,tch2_sigma,tch2_avg.size,200))
+    ax.legend()
+    ax.set(xlabel='t_2 - 0.5*(t_1 + t_3) (ns)', ylabel='Counts',
+           title='TOA for CH2 vs average of CH1+CH3')
+    pp.savefig(fig)
+    plt.close(fig)
+
     nch = len(measure_t0s.keys())
     iax = 0
     for ch, t0s in measure_t0s.items():
