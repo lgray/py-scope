@@ -431,6 +431,28 @@ def plotting_job(afile, scope_config, outfile):
            title='TOA for CH2 vs CH3')
     pp.savefig(fig)
     plt.close(fig)
+
+    fig, ax = plt.subplots(1, 1, dpi=400)
+    tch2_avg = (t0s_simple[2][0] - t0s_simple[0][0])[mask]
+    tch2_mean = np.mean(tch2_avg)
+    tch2_sigma = np.std(tch2_avg, ddof=1)
+    bins, edges = np.histogram(tch2_avg, 100, density=False)
+    centers = 0.5*(edges[1:] + edges[:-1])
+    try:
+        popt, pcov = curve_fit(gaus,centers,bins,p0=[1,tch2_mean,tch2_sigma])
+        ax.plot(centers, gaus(centers,popt[0], popt[1], popt[2]))
+        tch2_mean = popt[1]
+        tch2_sigma = abs(popt[2])
+    except:
+        pass
+    ax.hist(tch2_avg, 100, range=(-0.300, 0.300), 
+            density=False,
+            label='mean = %.3g ns\nsigma = %.3g ns\n#event = %d\n#bin = %d'%(tch2_mean,tch2_sigma,tch2_avg.size,200))
+    ax.legend()
+    ax.set(xlabel='t_1 - t_3 (ns)', ylabel='Counts',
+           title='TOA for CH1 vs CH3')
+    pp.savefig(fig)
+    plt.close(fig)
     
     fig, ax = plt.subplots(1, 1, dpi=400)
     tch2_avg = (0.5*(t0s_simple[0][0]+t0s_simple[2][0]) - t0s_simple[1][0])[mask]
