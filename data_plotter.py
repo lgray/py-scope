@@ -324,20 +324,6 @@ def plot_waveforms(time, v_ch1, v_ch2, v_ch3, v_ch4, pp, xlable="Time(ns)", ylab
         plt.show()
     plt.close(fig)
 
-transCond = {'highgain': 15.7e3,
-             'lowgain': 4.4e3}
-
-path ='data/'
-filename = "SingleTrigger_1139_16012020_0.hdf5"
-
-filelist = []
-for apath in os.listdir(path):
-    if apath.find(filename) > -1:
-        filelist.append(os.path.join(path,apath))
-
-filelist = ['data/SingleTrigger_1832_16012020_0.hdf5',
-            ]
-
 ##### signal processing for all channels #############
 def plotting_job(afile, scope_config, outfile):
     from matplotlib.backends.backend_pdf import PdfPages
