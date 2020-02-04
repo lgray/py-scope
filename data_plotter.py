@@ -42,10 +42,16 @@ def extract_dataset(filename, dataset_name='waveform'):
     f.close()
     return data_out, attrs_out
 
+def const(x, c):
+    return c
 
-def calculate_voltages_raw(v_in, pedestal_length=400):
-    v_pedestal = np.mean(v_in[:,:pedestal_length], axis=-1)
-    v_preamp_adjusted = (v_in.T - v_pedestal).T
+def calculate_voltages_raw(v_in, pedestal_length=350):
+    v_preamp_adjusted = np.copy(v_in)
+    for i in range(v_in.shape[0]):
+        ped = 0.0
+        popt, pcov = curve_fit(const, np.arange(v_in.shape[1]), v_in[i, :pedestal_length], p0=[ped])
+        ped = popt[0]
+        v_preamp_adjusted[i] = v_preamp_adjusted[i] - ped
     return v_preamp_adjusted
 
 def calculate_voltages(v_in, gain_post=-10, pedestal_length=400):
@@ -173,8 +179,6 @@ def calculate_time(v_in, dt, th_cfd=0.5, tdc_bin=0.005, tdc_start = 40):
     eventLen = v_in.shape[0]
     time = np.arange(v_in.shape[1])*dt*1e9 #nanoseconds
     
-    noise_floor = np.std(v_in[:300], ddof=1)
-    
     t_cfd = np.zeros(eventLen)
     for itrace, trace in enumerate(v_in):
         v_pk = np.argmin(trace)
@@ -182,8 +186,9 @@ def calculate_time(v_in, dt, th_cfd=0.5, tdc_bin=0.005, tdc_start = 40):
         tdc_start = time[max(0, v_pk - 20)]
         tdc_max = time[v_in.shape[1]-1]
         interp_signal = InterpolatedUnivariateSpline(time, trace)
-        v_pk = np.min(interp_signal(v_pk_range))
+        v_pk = np.min(interp_signal(v_pk_range))        
         v_th_cfd = 0 - th_cfd*(0 - v_pk)
+        
         binned_signal = interp_signal(np.linspace(start=tdc_start, stop=tdc_max, num=int((tdc_max-tdc_start)/0.005) + 1))
         t_cfd[itrace] = tdc_start + get_time_index(binned_signal, v_th_cfd)*0.005
         
@@ -197,6 +202,7 @@ def calculate_charge(v_in, dt, transCond, gain_post=-10, pedestal_length=400, ch
                                          pedestal_length=pedestal_length)
     time = np.arange(v_in.shape[1])*dt
     norm = charge_norm/transCond
+    
     return integrate.simps(norm*v_preamp_pedsub, time, axis=-1)
 
 
@@ -334,6 +340,7 @@ def plot_waveforms(time, v_ch1, v_ch2, v_ch3, v_ch4, pp, xlable="Time(ns)", ylab
 def plotting_job(afile, scope_config, outfile):
     from matplotlib.backends.backend_pdf import PdfPages
     tc = scope_config['transcond']['lowgain']
+    tcucsc = scope_config['transcond']['UCSC']
     data, attrs = extract_dataset(afile)    
     pp = PdfPages(outfile)
     trigger_t0s = None
@@ -344,7 +351,7 @@ def plotting_job(afile, scope_config, outfile):
     maxv_ch3 = np.max(calculate_voltages(data[2], gain_post=np.sign(scope_config['gains'][2])), axis=-1)
     
     ch1 = (maxv_ch1 > 0.050) & (maxv_ch1 < 0.272)
-    ch2 = (maxv_ch2 > 0.015) & (maxv_ch2 < 0.272)
+    ch2 = (maxv_ch2 > 0.050) & (maxv_ch2 < 0.272)
     ch3 = (maxv_ch3 > 0.030) & (maxv_ch3 < 0.272)
 
     #print(ch1.shape, ch2.shape, ch3.shape)
@@ -359,7 +366,7 @@ def plotting_job(afile, scope_config, outfile):
             plt.close(fig)
 
             fig, ax = plt.subplots(dpi=400)
-            plot_charge(data[:,mask,:], ch, attrs['dt'], tc, ax=ax, gain_post=thegain)                       
+            plot_charge(data[:,mask,:], ch, attrs['dt'], tc if ch != 1 else tcucsc, ax=ax, gain_post=thegain)
             pp.savefig(fig)
             plt.close(fig)
             
@@ -384,7 +391,7 @@ def plotting_job(afile, scope_config, outfile):
     tch21_avg = (t0s_simple[0][0] - t0s_simple[1][0])[mask]
     tch21_mean = np.mean(tch21_avg)
     tch21_sigma = np.std(tch21_avg, ddof=1)
-    bins, edges = np.histogram(tch21_avg, 100, density=False)
+    bins, edges = np.histogram(tch21_avg, 500, range=(-1.500, 1.500),  density=False)
     centers = 0.5*(edges[1:] + edges[:-1])
     try:
         popt, pcov = curve_fit(gaus,centers,bins,p0=[1,tch21_mean,tch21_sigma])
@@ -393,9 +400,9 @@ def plotting_job(afile, scope_config, outfile):
         tch21_sigma = abs(popt[2])
     except:
         pass
-    ax.hist(tch21_avg, 100, range=(-0.300, 0.300), 
+    ax.hist(tch21_avg, 500, range=(-1.500, 1.500), 
             density=False,
-            label='mean = %.3g ns\nsigma = %.3g ns\n#event = %d\n#bin = %d'%(tch21_mean,tch21_sigma,tch21_avg.size,200))
+            label='mean = %.3g ns\nsigma = %.3g ns\n#event = %d\n#bin = %d'%(tch21_mean,tch21_sigma,tch21_avg.size,500))
     ax.legend()
     ax.set(xlabel='t_2 - t_1  (ns)', ylabel='Counts',
            title='TOA for CH2 vs CH1')
@@ -408,7 +415,7 @@ def plotting_job(afile, scope_config, outfile):
     tch32_avg = (t0s_simple[2][0] - t0s_simple[1][0])[mask]
     tch32_mean = np.mean(tch32_avg)
     tch32_sigma = np.std(tch32_avg, ddof=1)
-    bins, edges = np.histogram(tch32_avg, 100, density=False)
+    bins, edges = np.histogram(tch32_avg, 500, range=(-1.500, 1.500), density=False)
     centers = 0.5*(edges[1:] + edges[:-1])
     try:
         popt, pcov = curve_fit(gaus,centers,bins,p0=[1,tch32_mean,tch32_sigma])
@@ -417,9 +424,9 @@ def plotting_job(afile, scope_config, outfile):
         tch2_sigma = abs(popt[2])
     except:
         pass
-    ax.hist(tch32_avg, 100, range=(-0.300, 0.300), 
+    ax.hist(tch32_avg, 500, range=(-1.500, 1.500), 
             density=False,
-            label='mean = %.3g ns\nsigma = %.3g ns\n#event = %d\n#bin = %d'%(tch32_mean,tch32_sigma,tch32_avg.size,200))
+            label='mean = %.3g ns\nsigma = %.3g ns\n#event = %d\n#bin = %d'%(tch32_mean,tch32_sigma,tch32_avg.size,500))
     ax.legend()
     ax.set(xlabel='t_2 - t_3 (ns)', ylabel='Counts',
            title='TOA for CH2 vs CH3')
@@ -432,7 +439,7 @@ def plotting_job(afile, scope_config, outfile):
     tch31_avg = (t0s_simple[2][0] - t0s_simple[0][0])[mask]
     tch31_mean = np.mean(tch31_avg)
     tch31_sigma = np.std(tch31_avg, ddof=1)
-    bins, edges = np.histogram(tch31_avg, 100, density=False)
+    bins, edges = np.histogram(tch31_avg, 500, range=(-1.50, 1.50), density=False)
     centers = 0.5*(edges[1:] + edges[:-1])
     try:
         popt, pcov = curve_fit(gaus,centers,bins,p0=[1,tch31_mean,tch31_sigma])
@@ -441,9 +448,9 @@ def plotting_job(afile, scope_config, outfile):
         tch31_sigma = abs(popt[2])
     except:
         pass
-    ax.hist(tch31_avg, 100, range=(-0.300, 0.300), 
+    ax.hist(tch31_avg, 500, range=(-1.50, 1.50), 
             density=False,
-            label='mean = %.3g ns\nsigma = %.3g ns\n#event = %d\n#bin = %d'%(tch31_mean,tch31_sigma,tch31_avg.size,200))
+            label='mean = %.3g ns\nsigma = %.3g ns\n#event = %d\n#bin = %d'%(tch31_mean,tch31_sigma,tch31_avg.size,500))
     ax.legend()
     ax.set(xlabel='t_1 - t_3 (ns)', ylabel='Counts',
            title='TOA for CH1 vs CH3')
@@ -456,7 +463,7 @@ def plotting_job(afile, scope_config, outfile):
     tch2_avg = (0.5*(t0s_simple[0][0]+t0s_simple[2][0]) - t0s_simple[1][0])[mask]
     tch2_mean = np.mean(tch2_avg)
     tch2_sigma = np.std(tch2_avg, ddof=1)
-    bins, edges = np.histogram(tch2_avg, 100, density=False)
+    bins, edges = np.histogram(tch2_avg, 500, range=(-1.500, 1.500),  density=False)
     centers = 0.5*(edges[1:] + edges[:-1])
     try:
         popt, pcov = curve_fit(gaus,centers,bins,p0=[1,tch2_mean,tch2_sigma])
@@ -468,9 +475,9 @@ def plotting_job(afile, scope_config, outfile):
         
     sigma_sens_2 = np.sqrt(0.5*(tch21_sigma**2 - tch31_sigma**2 + tch32_sigma**2))
 
-    ax.hist(tch2_avg, 100, range=(-0.300, 0.300), 
+    ax.hist(tch2_avg, 500, range=(-1.500, 1.500), 
             density=False,
-            label='sigma = %.3g ns\nCH2 Jitter = %.3g ns\n#event = %d\n#bin = %d'%(tch2_sigma, sigma_sens_2, tch2_avg.size,100))
+            label='sigma = %.3g ns\nCH2 Jitter = %.3g ns\n#event = %d\n#bin = %d'%(tch2_sigma, sigma_sens_2, tch2_avg.size,500))
     ax.legend()
     ax.set(xlabel='t_2 - 0.5*(t_1 + t_3) (ns)', ylabel='Counts',
            title='TOA for CH2 vs average of CH1+CH3')
@@ -489,7 +496,7 @@ def plotting_job(afile, scope_config, outfile):
 
 gain_post = -10.0
 scope_config = {'trigger': 2,
-                'transcond':{'highgain': 15.7e3, 'lowgain': 4.4e3},
+                'transcond':{'highgain': 15.7e3, 'lowgain': 4.4e3, 'UCSC': 4.7e3},
                 'gains': [gain_post, gain_post, gain_post, 1.0],
                 'thresholds': [0.5, 0.5, 0.5, 0.5]}
 
