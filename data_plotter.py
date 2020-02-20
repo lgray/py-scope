@@ -580,8 +580,8 @@ def plotting_job(afile, scope_config, outfile):
     print('sigma_431 after fit', tch4_sigma*1e12)
 
     bayes_info = scipy.stats.bayes_mvs(tch4_avg, alpha=0.68)
-    print('231', np.std(tch4_avg, ddof=1), bayes_info[2][0])
-    print('231\'', scipy.stats.bayes_mvs(tch4_avg[np.abs(tch4_avg - bayes_info[0][0]) < 5*bayes_info[2][0]]))
+    print('431', np.std(tch4_avg, ddof=1), bayes_info[2][0])
+    print('431\'', scipy.stats.bayes_mvs(tch4_avg[np.abs(tch4_avg - bayes_info[0][0]) < 5*bayes_info[2][0]]))
 
     sigma_sens_4 = np.sqrt(0.5*(tch41_sigma**2 - tch31_sigma**2 + tch34_sigma**2))
 
