@@ -346,7 +346,7 @@ def plot_waveforms(time, v_ch1, v_ch2, v_ch3, v_ch4, pp, xlable="Time(ns)", ylab
 def plotting_job(afile, scope_config, outfile):
     from matplotlib.backends.backend_pdf import PdfPages
     tc = scope_config['transcond']['lowgain']
-    tcucsc = scope_config['transcond']['lowgain']#scope_config['transcond']['UCSC']
+    tcucsc = scope_config['transcond']['UCSC']
     data, attrs = extract_dataset(afile)    
     pp = PdfPages(outfile)
     trigger_t0s = None
@@ -355,13 +355,14 @@ def plotting_job(afile, scope_config, outfile):
     maxv_ch1 = np.max(calculate_voltages(data[0], gain_post=np.sign(scope_config['gains'][0])), axis=-1)
     maxv_ch2 = np.max(calculate_voltages(data[1], gain_post=np.sign(scope_config['gains'][1])), axis=-1)
     maxv_ch3 = np.max(calculate_voltages(data[2], gain_post=np.sign(scope_config['gains'][2])), axis=-1)
+    maxv_ch4 = np.max(calculate_voltages(data[3], gain_post=np.sign(scope_config['gains'][3])), axis=-1)
     
     ch1 = (maxv_ch1 > 0.050) & (maxv_ch1 < 0.272)
     ch2 = (maxv_ch2 > 0.010) & (maxv_ch2 < 0.272)
     ch3 = (maxv_ch3 > 0.030) & (maxv_ch3 < 0.272)
+    ch4 = (maxv_ch4 > 0.030) & (maxv_ch3 < 0.272)
 
-    #print(ch1.shape, ch2.shape, ch3.shape)
-    mask = (ch1 & ch2 & ch3)
+    mask = (ch1 & ch2 & ch3 & ch4)
     t0s_simple = []
     for ch in range(4):        
         if attrs['chmask'][ch]:            
@@ -372,7 +373,7 @@ def plotting_job(afile, scope_config, outfile):
             plt.close(fig)
 
             fig, ax = plt.subplots(dpi=400)
-            plot_charge(data[:,mask,:], ch, attrs['dt'], tc if ch != 1 else tcucsc, ax=ax, gain_post=thegain)
+            plot_charge(data[:,mask,:], ch, attrs['dt'], tcucsc if ch != 1 else tc, ax=ax, gain_post=thegain)
             pp.savefig(fig)
             plt.close(fig)
             
@@ -396,8 +397,10 @@ def plotting_job(afile, scope_config, outfile):
     fit_plot_range = (-1.500, 1.500)
     nbins = 250
 
+    ################ t1 (reference UCSC-21), t2 (ETROC0 board), t3 (reference UCSC-24) ################
+    ## t0s_simple[0][0]: ch1, t0s_simple[1][0]: ch2, t0s_simple[2][0]: ch3
     fig, ax = plt.subplots(1, 1, dpi=400)
-    tch21_avg = (t0s_simple[0][0] - t0s_simple[1][0])[mask]
+    tch21_avg = (t0s_simple[1][0] - t0s_simple[0][0])[mask]
     tch21_mean = np.mean(tch21_avg)
     tch21_sigma = np.std(tch21_avg, ddof=1)
     bins, edges = np.histogram(tch21_avg, nbins, range=fit_plot_range,  density=False)
@@ -418,9 +421,9 @@ def plotting_job(afile, scope_config, outfile):
     pp.savefig(fig)
     plt.close(fig)
 
-    print('21 from fit', tch21_sigma)
+    print('21 from fit', tch21_sigma*1e12)
     #tch21_sigma = norm.fit(tch21_avg)[1]
-    print('21 from refit', tch21_sigma)
+    print('21 from refit', tch21_sigma*1e12)
 
     fig, ax = plt.subplots(1, 1, dpi=400)
     tch32_avg = (t0s_simple[2][0] - t0s_simple[1][0])[mask]
@@ -440,14 +443,13 @@ def plotting_job(afile, scope_config, outfile):
             density=False,
             label='mean = %.3g ns\nsigma = %.3g ns\n#event = %d\n#bin = %d'%(tch32_mean,tch32_sigma,tch32_avg.size,nbins))
     ax.legend()
-    ax.set(xlabel='t_2 - t_3 (ns)', ylabel='Counts',
+    ax.set(xlabel='t_3 - t_2 (ns)', ylabel='Counts',
            title='TOA for CH2 vs CH3')
     pp.savefig(fig)
     plt.close(fig)
 
-    print('32 from fit', tch32_sigma)
-    #tch32_sigma = norm.fit(tch32_avg)[1]
-    print('32 from refit', tch32_sigma)
+    print('32 from fit', tch32_sigma*1e12)
+    print('32 from refit', tch32_sigma*1e12)
 
     fig, ax = plt.subplots(1, 1, dpi=400)
     tch31_avg = (t0s_simple[2][0] - t0s_simple[0][0])[mask]
@@ -466,20 +468,19 @@ def plotting_job(afile, scope_config, outfile):
             density=False,
             label='mean = %.3g ns\nsigma = %.3g ns\n#event = %d\n#bin = %d'%(tch31_mean,tch31_sigma,tch31_avg.size,nbins))
     ax.legend()
-    ax.set(xlabel='t_1 - t_3 (ns)', ylabel='Counts',
+    ax.set(xlabel='t_3 - t_1 (ns)', ylabel='Counts',
            title='TOA for CH1 vs CH3')
     pp.savefig(fig)
     plt.close(fig)
     
-    print('31 from fit',tch31_sigma)
-    #tch31_sigma = norm.fit(tch31_avg)[1]
-    print('31 from refit', tch31_sigma)
+    print('31 from fit',tch31_sigma*1e12)
+    print('31 from refit', tch31_sigma*1e12)
 
     fig, ax = plt.subplots(1, 1, dpi=400)
     tch2_avg = (0.5*(t0s_simple[0][0]+t0s_simple[2][0]) - t0s_simple[1][0])[mask]
     tch2_mean = np.mean(tch2_avg)
     tch2_sigma = np.std(tch2_avg, ddof=1)
-    print('sigma_231 basic', tch2_sigma)
+    print('sigma_231 basic', tch2_sigma*1e12)
     bins, edges = np.histogram(tch2_avg, nbins, range=fit_plot_range,  density=False)
     centers = 0.5*(edges[1:] + edges[:-1])
     try:
@@ -490,7 +491,7 @@ def plotting_job(afile, scope_config, outfile):
     except:
         pass
 
-    print('sigma_231 after fit', tch2_sigma)
+    print('sigma_231 after fit', tch2_sigma*1e12)
 
     bayes_info = scipy.stats.bayes_mvs(tch2_avg, alpha=0.68)
     print('231', np.std(tch2_avg, ddof=1), bayes_info[2][0])
@@ -503,8 +504,93 @@ def plotting_job(afile, scope_config, outfile):
             density=False,
             label='sigma = %.3g ns\nCH2 Jitter = %.3g ns\n#event = %d\n#bin = %d'%(tch2_sigma, sigma_sens_2, tch2_avg.size,nbins))
     ax.legend()
-    ax.set(xlabel='t_2 - 0.5*(t_1 + t_3) (ns)', ylabel='Counts',
+    ax.set(xlabel='0.5*(t_1 + t_3) - t_2 (ns)', ylabel='Counts',
            title='TOA for CH2 vs average of CH1+CH3')
+    pp.savefig(fig)
+    plt.close(fig)
+
+    ################ t1 (reference UCSC-21), t4 (UCSC), t3 (reference UCSC-24) ################
+    ## t0s_simple[0][0]: ch1, t0s_simple[3][0]: ch4, t0s_simple[2][0]: ch3
+    fig, ax = plt.subplots(1, 1, dpi=400)
+    tch41_avg = (t0s_simple[3][0] - t0s_simple[0][0])[mask]
+    tch41_mean = np.mean(tch41_avg)
+    tch41_sigma = np.std(tch41_avg, ddof=1)
+    bins, edges = np.histogram(tch41_avg, nbins, range=fit_plot_range,  density=False)
+    centers = 0.5*(edges[1:] + edges[:-1])
+    try:
+        popt, pcov = curve_fit(gaus,centers,bins,p0=[1,tch41_mean,tch41_sigma])
+        ax.plot(centers, gaus(centers,popt[0], popt[1], popt[2]))
+        tch41_mean = popt[1]
+        tch41_sigma = abs(popt[2])
+    except:
+        pass
+    ax.hist(tch41_avg, nbins, range=fit_plot_range, 
+            density=False,
+            label='mean = %.3g ns\nsigma = %.3g ns\n#event = %d\n#bin = %d'%(tch41_mean,tch41_sigma,tch41_avg.size, nbins))
+    ax.legend()
+    ax.set(xlabel='t_4 - t_1  (ns)', ylabel='Counts',
+           title='TOA for CH4 vs CH1')
+    pp.savefig(fig)
+    plt.close(fig)
+
+    print('41 from fit', tch41_sigma*1e12)
+    print('41 from refit', tch41_sigma*1e12)
+
+    fig, ax = plt.subplots(1, 1, dpi=400)
+    tch34_avg = (t0s_simple[2][0] - t0s_simple[3][0])[mask]
+    tch34_mean = np.mean(tch34_avg)
+    tch34_sigma = norm.fit(tch34_avg)[1]
+    bins, edges = np.histogram(tch34_avg, nbins, range=fit_plot_range, density=False)
+    centers = 0.5*(edges[1:] + edges[:-1])
+    try:
+        popt, pcov = curve_fit(gaus,centers,bins,p0=[1,tch34_mean,tch34_sigma])
+        ax.plot(centers, gaus(centers,popt[0], popt[1], popt[2]))
+        tch34_mean = popt[1]
+        tch34_sigma = abs(popt[2])
+    
+    except:
+        pass
+    ax.hist(tch34_avg, nbins, range=fit_plot_range, 
+            density=False,
+            label='mean = %.3g ns\nsigma = %.3g ns\n#event = %d\n#bin = %d'%(tch34_mean,tch34_sigma,tch34_avg.size,nbins))
+    ax.legend()
+    ax.set(xlabel='t_3 - t_4 (ns)', ylabel='Counts',
+           title='TOA for CH4 vs CH3')
+    pp.savefig(fig)
+    plt.close(fig)
+
+    print('34 from fit', tch34_sigma*1e12)
+    print('34 from refit', tch34_sigma*1e12)
+
+    fig, ax = plt.subplots(1, 1, dpi=400)
+    tch4_avg = (0.5*(t0s_simple[0][0]+t0s_simple[2][0]) - t0s_simple[3][0])[mask]
+    tch4_mean = np.mean(tch4_avg)
+    tch4_sigma = np.std(tch4_avg, ddof=1)
+    print('sigma_431 basic', tch4_sigma*1e12)
+    bins, edges = np.histogram(tch4_avg, nbins, range=fit_plot_range,  density=False)
+    centers = 0.5*(edges[1:] + edges[:-1])
+    try:
+        popt, pcov = curve_fit(gaus,centers,bins,p0=[1,tch4_mean,tch4_sigma])
+        ax.plot(centers, gaus(centers,popt[0], popt[1], popt[2]))
+        tch4_mean = popt[1]
+        tch4_sigma = abs(popt[2])
+    except:
+        pass
+
+    print('sigma_431 after fit', tch4_sigma*1e12)
+
+    bayes_info = scipy.stats.bayes_mvs(tch4_avg, alpha=0.68)
+    print('231', np.std(tch4_avg, ddof=1), bayes_info[2][0])
+    print('231\'', scipy.stats.bayes_mvs(tch4_avg[np.abs(tch4_avg - bayes_info[0][0]) < 5*bayes_info[2][0]]))
+
+    sigma_sens_4 = np.sqrt(0.5*(tch41_sigma**2 - tch31_sigma**2 + tch34_sigma**2))
+
+    ax.hist(tch4_avg, nbins, range=fit_plot_range,
+            density=False,
+            label='sigma = %.3g ns\nCH4 Jitter = %.3g ns\n#event = %d\n#bin = %d'%(tch4_sigma, sigma_sens_4, tch4_avg.size,nbins))
+    ax.legend()
+    ax.set(xlabel='0.5*(t_1 + t_3) - t_4 (ns)', ylabel='Counts',
+           title='TOA for CH4 vs average of CH1+CH3')
     pp.savefig(fig)
     plt.close(fig)
 
@@ -520,8 +606,8 @@ def plotting_job(afile, scope_config, outfile):
 
 gain_post = -10.0
 scope_config = {'trigger': 2,
-                'transcond':{'highgain': 15.7e3, 'lowgain': 4.4e3, 'UCSC': 4.7e2},
-                'gains': [gain_post, gain_post, gain_post, 1.0],
+                'transcond':{'highgain': 15.7e3*0.75, 'lowgain': 4.4e3*0.75, 'UCSC': 4.7e2}, ## 0.75 is a scale factor for ETROC0 v2 sensor board
+                'gains': [gain_post, gain_post, gain_post, gain_post],
                 'thresholds': [0.5, 0.5, 0.5, 0.5]}
 
 import sys
